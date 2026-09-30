@@ -1,9 +1,12 @@
+from __future__ import annotations
+
 import logging
 import sys
 
 from telegram import Update
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -13,8 +16,17 @@ from telegram.ext import (
 from config import (
     BOT_TOKEN,
     LOG_LEVEL,
-    validate_config,
     get_config_summary,
+    validate_config,
+)
+from handlers import (
+    callback_handler,
+    config_command,
+    help_command,
+    media_url_handler,
+    ping_command,
+    start_command,
+    status_command,
 )
 
 
@@ -23,7 +35,11 @@ from config import (
 # ============================================================
 
 logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL, logging.INFO),
+    level=getattr(
+        logging,
+        LOG_LEVEL,
+        logging.INFO,
+    ),
     format=(
         "%(asctime)s | "
         "%(levelname)s | "
@@ -36,95 +52,6 @@ logger = logging.getLogger("media_bot")
 
 
 # ============================================================
-# /START
-# ============================================================
-
-async def start_command(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-) -> None:
-    """Handle /start."""
-
-    if not update.message:
-        return
-
-    user = update.effective_user
-
-    name = user.first_name if user else "there"
-
-    text = (
-        f"👋 Hello {name}!\n\n"
-        "🎬 Send me a supported public media link.\n\n"
-        "Supported platforms:\n"
-        "• TeraBox\n"
-        "• Instagram\n\n"
-        "I will detect the link automatically "
-        "and show the available actions."
-    )
-
-    await update.message.reply_text(text)
-
-
-# ============================================================
-# /HELP
-# ============================================================
-
-async def help_command(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-) -> None:
-    """Show help information."""
-
-    if not update.message:
-        return
-
-    text = (
-        "📖 Help\n\n"
-        "Send a public TeraBox or Instagram media URL "
-        "directly to this chat.\n\n"
-        "The bot will try to:\n"
-        "1. Detect the platform\n"
-        "2. Resolve the media\n"
-        "3. Show media information\n"
-        "4. Offer Play/Download actions\n\n"
-        "⚠️ Private or login-protected content is not supported."
-    )
-
-    await update.message.reply_text(text)
-
-
-# ============================================================
-# URL MESSAGE HANDLER
-# ============================================================
-
-async def url_message_handler(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-) -> None:
-    """
-    Receive normal text messages.
-
-    Actual URL detection/resolution will be implemented
-    in the platform modules added later.
-    """
-
-    if not update.message:
-        return
-
-    text = update.message.text or ""
-
-    if not text.strip():
-        return
-
-    # Temporary response.
-    # This will be replaced by the URL router in a later file.
-    await update.message.reply_text(
-        "🔎 Checking your link...\n\n"
-        "The media resolver module is being initialized."
-    )
-
-
-# ============================================================
 # ERROR HANDLER
 # ============================================================
 
@@ -132,18 +59,29 @@ async def error_handler(
     update: object,
     context: ContextTypes.DEFAULT_TYPE,
 ) -> None:
-    """Handle unexpected Telegram/application errors."""
+    """
+    Global Telegram error handler.
+
+    Never sends internal tracebacks or secrets to users.
+    """
 
     error = context.error
 
-    logger.exception(
-        "Unhandled bot error: %s",
+    logger.error(
+        "Unhandled Telegram error: %r",
         error,
+        exc_info=(
+            type(error),
+            error,
+            error.__traceback__,
+        )
+        if error
+        else None,
     )
 
 
 # ============================================================
-# APPLICATION CREATION
+# APPLICATION
 # ============================================================
 
 def create_application() -> Application:
@@ -160,7 +98,10 @@ def create_application() -> Application:
         .build()
     )
 
-    # Commands
+    # --------------------------------------------------------
+    # Basic commands
+    # --------------------------------------------------------
+
     application.add_handler(
         CommandHandler(
             "start",
@@ -175,15 +116,56 @@ def create_application() -> Application:
         )
     )
 
-    # Text messages
+    # --------------------------------------------------------
+    # Admin commands
+    # --------------------------------------------------------
+
     application.add_handler(
-        MessageHandler(
-            filters.TEXT & ~filters.COMMAND,
-            url_message_handler,
+        CommandHandler(
+            "status",
+            status_command,
         )
     )
 
+    application.add_handler(
+        CommandHandler(
+            "config",
+            config_command,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "ping",
+            ping_command,
+        )
+    )
+
+    # --------------------------------------------------------
+    # Inline button callbacks
+    # --------------------------------------------------------
+
+    application.add_handler(
+        CallbackQueryHandler(
+            callback_handler,
+        )
+    )
+
+    # --------------------------------------------------------
+    # Normal text messages
+    # --------------------------------------------------------
+
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            media_url_handler,
+        )
+    )
+
+    # --------------------------------------------------------
     # Global error handler
+    # --------------------------------------------------------
+
     application.add_error_handler(
         error_handler
     )
@@ -192,11 +174,11 @@ def create_application() -> Application:
 
 
 # ============================================================
-# STARTUP
+# MAIN
 # ============================================================
 
 def main() -> None:
-    """Start the Telegram bot."""
+    """Start the bot."""
 
     try:
         validate_config()
@@ -212,7 +194,6 @@ def main() -> None:
         "Starting Telegram media bot..."
     )
 
-    # Only safe, non-secret configuration is logged.
     summary = get_config_summary()
 
     logger.info(
@@ -226,16 +207,11 @@ def main() -> None:
         "Bot is running."
     )
 
-    # Long polling works well for a simple Railway worker.
     application.run_polling(
         allowed_updates=Update.ALL_TYPES,
         drop_pending_updates=True,
     )
 
-
-# ============================================================
-# ENTRY POINT
-# ============================================================
 
 if __name__ == "__main__":
     main()
